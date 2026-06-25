@@ -306,6 +306,24 @@ def delete_entry(entry_id: str) -> None:
     st.session_state.last_save_notice = "업무일지를 삭제했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
 
 
+def clear_edit_state() -> None:
+    st.session_state.editing_entry_id = ""
+    st.session_state.editing_display_id = ""
+    for key in [
+        "edit_date_value",
+        "edit_title_value",
+        "edit_type_value",
+        "edit_status_value",
+        "edit_priority_value",
+        "edit_repeat_value",
+        "edit_amount_value",
+        "edit_vendor_value",
+        "edit_memo_value",
+    ]:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
 def render_storage_panel() -> None:
     with st.sidebar:
         st.header("저장")
@@ -454,52 +472,58 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
                 st.rerun()
             if action_cols[2].button("수정 열기", key=f"open_edit_{row['id']}", use_container_width=True):
                 st.session_state.editing_entry_id = real_entry_id
+                st.session_state.editing_display_id = str(row["id"])
+                st.session_state.edit_date_value = row["업무일자"]
+                st.session_state.edit_title_value = row["업무명"]
+                st.session_state.edit_type_value = row["업무유형"]
+                st.session_state.edit_status_value = row["진행상태"]
+                st.session_state.edit_priority_value = row["중요도"]
+                st.session_state.edit_repeat_value = row["반복월간"]
+                st.session_state.edit_amount_value = int(row["금액"])
+                st.session_state.edit_vendor_value = row["거래처"]
+                st.session_state.edit_memo_value = row["메모"]
                 st.rerun()
             if action_cols[3].button("삭제", key=f"delete_{row['id']}", use_container_width=True):
                 delete_entry(real_entry_id)
+                clear_edit_state()
                 st.rerun()
 
             if st.session_state.get("editing_entry_id") == real_entry_id:
-                with st.form(f"edit_form_{row['id']}"):
+                with st.form(f"edit_form_{st.session_state.get('editing_display_id', row['id'])}"):
                     st.markdown("**업무 내용 수정**")
-                    edit_date = st.date_input("업무일자", value=row["업무일자"], key=f"edit_date_{row['id']}")
-                    edit_title = st.text_input("업무명", value=row["업무명"], key=f"edit_title_{row['id']}")
+                    edit_date = st.date_input("업무일자", key="edit_date_value")
+                    edit_title = st.text_input("업무명", key="edit_title_value")
                     edit_cols_1 = st.columns(2)
                     edit_type = edit_cols_1[0].selectbox(
                         "업무유형",
                         TASK_TYPES,
-                        index=TASK_TYPES.index(row["업무유형"]) if row["업무유형"] in TASK_TYPES else 0,
-                        key=f"edit_type_{row['id']}",
+                        key="edit_type_value",
                     )
                     edit_status = edit_cols_1[1].selectbox(
                         "진행상태",
                         STATUSES,
-                        index=STATUSES.index(row["진행상태"]) if row["진행상태"] in STATUSES else 0,
-                        key=f"edit_status_{row['id']}",
+                        key="edit_status_value",
                     )
                     edit_cols_2 = st.columns(2)
                     edit_priority = edit_cols_2[0].selectbox(
                         "중요도",
                         PRIORITIES,
-                        index=PRIORITIES.index(row["중요도"]) if row["중요도"] in PRIORITIES else 1,
-                        key=f"edit_priority_{row['id']}",
+                        key="edit_priority_value",
                     )
                     edit_repeat = edit_cols_2[1].selectbox(
                         "매월 같은 날짜 반복",
                         REPEAT_FLAGS,
-                        index=REPEAT_FLAGS.index(row["반복월간"]) if row["반복월간"] in REPEAT_FLAGS else 0,
-                        key=f"edit_repeat_{row['id']}",
+                        key="edit_repeat_value",
                     )
                     edit_cols_3 = st.columns(2)
                     edit_amount = edit_cols_3[0].number_input(
                         "금액",
                         min_value=0,
                         step=1000,
-                        value=int(row["금액"]),
-                        key=f"edit_amount_{row['id']}",
+                        key="edit_amount_value",
                     )
-                    edit_vendor = edit_cols_3[1].text_input("거래처/관련처", value=row["거래처"], key=f"edit_vendor_{row['id']}")
-                    edit_memo = st.text_area("메모", value=row["메모"], key=f"edit_memo_{row['id']}")
+                    edit_vendor = edit_cols_3[1].text_input("거래처/관련처", key="edit_vendor_value")
+                    edit_memo = st.text_area("메모", key="edit_memo_value")
                     save_cols = st.columns(2)
                     save_edit = save_cols[0].form_submit_button("수정 저장", use_container_width=True, type="primary")
                     cancel_edit = save_cols[1].form_submit_button("취소", use_container_width=True)
@@ -523,10 +547,10 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
                                 "메모": edit_memo,
                             },
                         )
-                        st.session_state.editing_entry_id = ""
+                        clear_edit_state()
                         st.rerun()
                 if cancel_edit:
-                    st.session_state.editing_entry_id = ""
+                    clear_edit_state()
                     st.rerun()
 
 
