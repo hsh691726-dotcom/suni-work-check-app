@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 
-APP_TITLE = "총무회계 업무일지"
+APP_TITLE = "경영지원팀 업무일지"
 APP_SUBTITLE = "달력에서 날짜를 누르고 바로 기록하는 경영지원 업무일지"
 
 BASE_DIR = Path(__file__).parent
