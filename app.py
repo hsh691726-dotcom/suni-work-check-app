@@ -288,6 +288,19 @@ def update_status(entry_id: str, status: str) -> None:
         st.session_state.entries = normalize_entries(st.session_state.entries)
 
 
+def update_entry(entry_id: str, updated: dict) -> None:
+    mask = st.session_state.entries["id"] == entry_id
+    if not mask.any():
+        return
+
+    for key, value in updated.items():
+        if key in JOURNAL_COLUMNS and key != "id":
+            st.session_state.entries.loc[mask, key] = value
+    st.session_state.entries.loc[mask, "수정일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.entries = normalize_entries(st.session_state.entries)
+    st.session_state.last_save_notice = "업무일지를 수정했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
+
+
 def delete_entry(entry_id: str) -> None:
     st.session_state.entries = st.session_state.entries[st.session_state.entries["id"] != entry_id].copy()
     st.session_state.last_save_notice = "업무일지를 삭제했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
@@ -429,7 +442,7 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
             if is_generated:
                 st.caption("반복 업무는 원본 반복 일정에서 자동 표시됩니다. 상태 변경은 원본 반복 업무에 적용됩니다.")
 
-            action_cols = st.columns([2, 2, 1])
+            action_cols = st.columns([2, 1.4, 1.4, 1])
             new_status = action_cols[0].selectbox(
                 "상태",
                 STATUSES,
@@ -439,9 +452,82 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
             if action_cols[1].button("상태 저장", key=f"save_status_{row['id']}", use_container_width=True):
                 update_status(real_entry_id, new_status)
                 st.rerun()
-            if action_cols[2].button("삭제", key=f"delete_{row['id']}", use_container_width=True):
+            if action_cols[2].button("수정 열기", key=f"open_edit_{row['id']}", use_container_width=True):
+                st.session_state.editing_entry_id = real_entry_id
+                st.rerun()
+            if action_cols[3].button("삭제", key=f"delete_{row['id']}", use_container_width=True):
                 delete_entry(real_entry_id)
                 st.rerun()
+
+            if st.session_state.get("editing_entry_id") == real_entry_id:
+                with st.form(f"edit_form_{row['id']}"):
+                    st.markdown("**업무 내용 수정**")
+                    edit_date = st.date_input("업무일자", value=row["업무일자"], key=f"edit_date_{row['id']}")
+                    edit_title = st.text_input("업무명", value=row["업무명"], key=f"edit_title_{row['id']}")
+                    edit_cols_1 = st.columns(2)
+                    edit_type = edit_cols_1[0].selectbox(
+                        "업무유형",
+                        TASK_TYPES,
+                        index=TASK_TYPES.index(row["업무유형"]) if row["업무유형"] in TASK_TYPES else 0,
+                        key=f"edit_type_{row['id']}",
+                    )
+                    edit_status = edit_cols_1[1].selectbox(
+                        "진행상태",
+                        STATUSES,
+                        index=STATUSES.index(row["진행상태"]) if row["진행상태"] in STATUSES else 0,
+                        key=f"edit_status_{row['id']}",
+                    )
+                    edit_cols_2 = st.columns(2)
+                    edit_priority = edit_cols_2[0].selectbox(
+                        "중요도",
+                        PRIORITIES,
+                        index=PRIORITIES.index(row["중요도"]) if row["중요도"] in PRIORITIES else 1,
+                        key=f"edit_priority_{row['id']}",
+                    )
+                    edit_repeat = edit_cols_2[1].selectbox(
+                        "매월 같은 날짜 반복",
+                        REPEAT_FLAGS,
+                        index=REPEAT_FLAGS.index(row["반복월간"]) if row["반복월간"] in REPEAT_FLAGS else 0,
+                        key=f"edit_repeat_{row['id']}",
+                    )
+                    edit_cols_3 = st.columns(2)
+                    edit_amount = edit_cols_3[0].number_input(
+                        "금액",
+                        min_value=0,
+                        step=1000,
+                        value=int(row["금액"]),
+                        key=f"edit_amount_{row['id']}",
+                    )
+                    edit_vendor = edit_cols_3[1].text_input("거래처/관련처", value=row["거래처"], key=f"edit_vendor_{row['id']}")
+                    edit_memo = st.text_area("메모", value=row["메모"], key=f"edit_memo_{row['id']}")
+                    save_cols = st.columns(2)
+                    save_edit = save_cols[0].form_submit_button("수정 저장", use_container_width=True, type="primary")
+                    cancel_edit = save_cols[1].form_submit_button("취소", use_container_width=True)
+
+                if save_edit:
+                    if not edit_title.strip():
+                        st.warning("업무명을 입력해 주세요.")
+                    else:
+                        update_entry(
+                            real_entry_id,
+                            {
+                                "업무일자": edit_date,
+                                "업무명": edit_title,
+                                "업무유형": edit_type,
+                                "진행상태": edit_status,
+                                "중요도": edit_priority,
+                                "금액": edit_amount,
+                                "거래처": edit_vendor,
+                                "반복월간": edit_repeat,
+                                "반복일": edit_date.day if edit_repeat == "예" else 0,
+                                "메모": edit_memo,
+                            },
+                        )
+                        st.session_state.editing_entry_id = ""
+                        st.rerun()
+                if cancel_edit:
+                    st.session_state.editing_entry_id = ""
+                    st.rerun()
 
 
 def render_summary_lists(df: pd.DataFrame, today: date) -> None:
@@ -486,6 +572,8 @@ def initialize_state() -> None:
         st.session_state.loaded_from_google = False
     if "last_save_notice" not in st.session_state:
         st.session_state.last_save_notice = ""
+    if "editing_entry_id" not in st.session_state:
+        st.session_state.editing_entry_id = ""
 
     if google_sheets_is_configured() and not st.session_state.loaded_from_google:
         try:
