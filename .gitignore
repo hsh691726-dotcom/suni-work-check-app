@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 .DS_Store
 outputs/
+data/
 .streamlit/secrets.toml

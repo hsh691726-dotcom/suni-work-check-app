@@ -16,6 +16,8 @@ APP_SUBTITLE = "달력에서 날짜를 누르고 바로 기록하는 경영지�
 
 BASE_DIR = Path(__file__).parent
 JOURNAL_WORKSHEET = "journal_entries"
+LOCAL_DATA_DIR = BASE_DIR / "data"
+LOCAL_BACKUP_PATH = LOCAL_DATA_DIR / "journal_entries_local.csv"
 
 GOOGLE_SHEETS_SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -180,6 +182,33 @@ def save_entries_to_google_sheets(df: pd.DataFrame) -> None:
     worksheet.update(values)
 
 
+def save_entries_to_local_backup(df: pd.DataFrame) -> None:
+    LOCAL_DATA_DIR.mkdir(exist_ok=True)
+    output = normalize_entries(df).copy()
+    output["업무일자"] = output["업무일자"].astype(str)
+    output.to_csv(LOCAL_BACKUP_PATH, index=False, encoding="utf-8-sig")
+
+
+def load_entries_from_local_backup() -> pd.DataFrame:
+    if not LOCAL_BACKUP_PATH.exists():
+        return empty_entries()
+    return normalize_entries(pd.read_csv(LOCAL_BACKUP_PATH, encoding="utf-8-sig"))
+
+
+def persist_entries(action_label: str) -> None:
+    save_entries_to_local_backup(st.session_state.entries)
+    if google_sheets_is_configured():
+        try:
+            save_entries_to_google_sheets(st.session_state.entries)
+            st.session_state.last_save_notice = f"{action_label} Google Sheets에 자동 저장했습니다."
+        except Exception as exc:
+            st.session_state.last_save_notice = (
+                f"{action_label} 화면과 로컬 백업에는 남아 있지만 Google Sheets 자동 저장은 실패했습니다: {exc}"
+            )
+    else:
+        st.session_state.last_save_notice = f"{action_label} 이 노트북의 로컬 백업에 자동 저장했습니다."
+
+
 def default_entries() -> pd.DataFrame:
     today = date.today()
     rows = [
@@ -277,7 +306,7 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 def add_entry(entry: dict) -> None:
     st.session_state.entries = normalize_entries(pd.concat([st.session_state.entries, pd.DataFrame([entry])], ignore_index=True))
-    st.session_state.last_save_notice = "업무일지를 추가했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
+    persist_entries("업무를 추가했고")
 
 
 def update_status(entry_id: str, status: str) -> None:
@@ -286,6 +315,7 @@ def update_status(entry_id: str, status: str) -> None:
         st.session_state.entries.loc[mask, "진행상태"] = status
         st.session_state.entries.loc[mask, "수정일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.entries = normalize_entries(st.session_state.entries)
+        persist_entries("상태를 변경했고")
 
 
 def update_entry(entry_id: str, updated: dict) -> None:
@@ -298,30 +328,22 @@ def update_entry(entry_id: str, updated: dict) -> None:
             st.session_state.entries.loc[mask, key] = value
     st.session_state.entries.loc[mask, "수정일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.entries = normalize_entries(st.session_state.entries)
-    st.session_state.last_save_notice = "업무일지를 수정했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
+    persist_entries("업무를 수정했고")
 
 
 def delete_entry(entry_id: str) -> None:
     st.session_state.entries = st.session_state.entries[st.session_state.entries["id"] != entry_id].copy()
-    st.session_state.last_save_notice = "업무일지를 삭제했습니다. 다른 기기에도 반영하려면 왼쪽 저장 버튼을 눌러 주세요."
+    persist_entries("업무를 삭제했고")
 
 
 def clear_edit_state() -> None:
     st.session_state.editing_entry_id = ""
     st.session_state.editing_display_id = ""
-    for key in [
-        "edit_date_value",
-        "edit_title_value",
-        "edit_type_value",
-        "edit_status_value",
-        "edit_priority_value",
-        "edit_repeat_value",
-        "edit_amount_value",
-        "edit_vendor_value",
-        "edit_memo_value",
-    ]:
-        if key in st.session_state:
-            del st.session_state[key]
+
+
+def choice_index(value: object, choices: list[str], default: str) -> int:
+    text = normalize_choice(value, choices, default)
+    return choices.index(text)
 
 
 def render_storage_panel() -> None:
@@ -340,6 +362,7 @@ def render_storage_panel() -> None:
                     st.error(f"불러오기 실패: {exc}")
             if st.button("현재 업무일지 저장", use_container_width=True, type="primary"):
                 try:
+                    save_entries_to_local_backup(st.session_state.entries)
                     save_entries_to_google_sheets(st.session_state.entries)
                     st.success("Google Sheets에 저장했습니다.")
                 except Exception as exc:
@@ -473,15 +496,6 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
             if action_cols[2].button("수정 열기", key=f"open_edit_{row['id']}", use_container_width=True):
                 st.session_state.editing_entry_id = real_entry_id
                 st.session_state.editing_display_id = str(row["id"])
-                st.session_state.edit_date_value = row["업무일자"]
-                st.session_state.edit_title_value = row["업무명"]
-                st.session_state.edit_type_value = row["업무유형"]
-                st.session_state.edit_status_value = row["진행상태"]
-                st.session_state.edit_priority_value = row["중요도"]
-                st.session_state.edit_repeat_value = row["반복월간"]
-                st.session_state.edit_amount_value = int(row["금액"])
-                st.session_state.edit_vendor_value = row["거래처"]
-                st.session_state.edit_memo_value = row["메모"]
                 st.rerun()
             if action_cols[3].button("삭제", key=f"delete_{row['id']}", use_container_width=True):
                 delete_entry(real_entry_id)
@@ -489,41 +503,63 @@ def render_day_entries(df: pd.DataFrame, selected_date: date) -> None:
                 st.rerun()
 
             if st.session_state.get("editing_entry_id") == real_entry_id:
-                with st.form(f"edit_form_{st.session_state.get('editing_display_id', row['id'])}"):
+                edit_key = str(st.session_state.get("editing_display_id", row["id"]))
+                with st.form(f"edit_form_{edit_key}"):
                     st.markdown("**업무 내용 수정**")
-                    edit_date = st.date_input("업무일자", key="edit_date_value")
-                    edit_title = st.text_input("업무명", key="edit_title_value")
+                    edit_date = st.date_input(
+                        "업무일자",
+                        value=parse_date(row["업무일자"]),
+                        key=f"edit_date_{edit_key}",
+                    )
+                    edit_title = st.text_input(
+                        "업무명",
+                        value=str(row["업무명"]),
+                        key=f"edit_title_{edit_key}",
+                    )
                     edit_cols_1 = st.columns(2)
                     edit_type = edit_cols_1[0].selectbox(
                         "업무유형",
                         TASK_TYPES,
-                        key="edit_type_value",
+                        index=choice_index(row["업무유형"], TASK_TYPES, "기타"),
+                        key=f"edit_type_{edit_key}",
                     )
                     edit_status = edit_cols_1[1].selectbox(
                         "진행상태",
                         STATUSES,
-                        key="edit_status_value",
+                        index=choice_index(row["진행상태"], STATUSES, "예정"),
+                        key=f"edit_status_{edit_key}",
                     )
                     edit_cols_2 = st.columns(2)
                     edit_priority = edit_cols_2[0].selectbox(
                         "중요도",
                         PRIORITIES,
-                        key="edit_priority_value",
+                        index=choice_index(row["중요도"], PRIORITIES, "보통"),
+                        key=f"edit_priority_{edit_key}",
                     )
                     edit_repeat = edit_cols_2[1].selectbox(
                         "매월 같은 날짜 반복",
                         REPEAT_FLAGS,
-                        key="edit_repeat_value",
+                        index=choice_index(row["반복월간"], REPEAT_FLAGS, "아니오"),
+                        key=f"edit_repeat_{edit_key}",
                     )
                     edit_cols_3 = st.columns(2)
                     edit_amount = edit_cols_3[0].number_input(
                         "금액",
                         min_value=0,
                         step=1000,
-                        key="edit_amount_value",
+                        value=normalize_money(row["금액"]),
+                        key=f"edit_amount_{edit_key}",
                     )
-                    edit_vendor = edit_cols_3[1].text_input("거래처/관련처", key="edit_vendor_value")
-                    edit_memo = st.text_area("메모", key="edit_memo_value")
+                    edit_vendor = edit_cols_3[1].text_input(
+                        "거래처/관련처",
+                        value=str(row["거래처"]),
+                        key=f"edit_vendor_{edit_key}",
+                    )
+                    edit_memo = st.text_area(
+                        "메모",
+                        value=str(row["메모"]),
+                        key=f"edit_memo_{edit_key}",
+                    )
                     save_cols = st.columns(2)
                     save_edit = save_cols[0].form_submit_button("수정 저장", use_container_width=True, type="primary")
                     cancel_edit = save_cols[1].form_submit_button("취소", use_container_width=True)
@@ -605,13 +641,28 @@ def initialize_state() -> None:
             st.session_state.entries = loaded
             st.session_state.loaded_from_google = True
             if loaded.empty:
-                st.session_state.last_save_notice = "새 업무일지 시트가 비어 있습니다. 달력에서 날짜를 눌러 업무를 추가하세요."
+                local_backup = load_entries_from_local_backup()
+                if local_backup.empty:
+                    st.session_state.last_save_notice = "새 업무일지 시트가 비어 있습니다. 달력에서 날짜를 눌러 업무를 추가하세요."
+                else:
+                    st.session_state.entries = local_backup
+                    st.session_state.last_save_notice = "Google Sheets가 비어 있어 이 노트북의 로컬 백업을 불러왔습니다."
             else:
                 st.session_state.last_save_notice = "Google Sheets에서 업무일지를 자동으로 불러왔습니다."
         except Exception as exc:
-            st.session_state.entries = empty_entries()
+            local_backup = load_entries_from_local_backup()
+            st.session_state.entries = local_backup
             st.session_state.loaded_from_google = True
-            st.session_state.last_save_notice = f"Google Sheets 자동 불러오기 실패: {exc}"
+            if local_backup.empty:
+                st.session_state.last_save_notice = f"Google Sheets 자동 불러오기 실패: {exc}"
+            else:
+                st.session_state.last_save_notice = f"Google Sheets 자동 불러오기 실패로 로컬 백업을 불러왔습니다: {exc}"
+    elif not google_sheets_is_configured() and not st.session_state.loaded_from_google:
+        local_backup = load_entries_from_local_backup()
+        if not local_backup.empty:
+            st.session_state.entries = local_backup
+            st.session_state.last_save_notice = "이 노트북의 로컬 백업에서 업무일지를 불러왔습니다."
+        st.session_state.loaded_from_google = True
 
 
 def render_styles() -> None:
